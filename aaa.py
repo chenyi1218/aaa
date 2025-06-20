@@ -48,15 +48,34 @@ except KeyError:
     """)
     # 不使用 st.stop()，讓使用者可以看到整個應用程式介面，但 AI 功能會被禁用
 
-# ✅ 建立 Gemini 模型物件
-model = None # 初始化為 None
-gemini_api_working = False # 標誌位，指示 Gemini API 是否可用
-
 # 設定您想要使用的 Gemini 模型名稱
 # 請根據您的需求選擇以下其中一個。如果您不確定，先嘗試 gemini-pro
 # TARGET_GEMINI_MODEL = "models/gemini-pro"
 # TARGET_GEMINI_MODEL = "models/gemini-1.5-pro"
 TARGET_GEMINI_MODEL = "models/gemini-1.5-flash"
+
+# ✅ 建立 Gemini 模型物件
+model = None # 初始化為 None
+gemini_api_working = False # 標誌位，指示 Gemini API 是否可用
+
+# ====================================================================================
+# 使用 @st.cache_resource 來快取 Gemini 模型物件的載入
+# 這會確保模型只在應用程式啟動時載入一次，即使 Streamlit 重新運行也不會重複載入。
+@st.cache_resource
+def get_gemini_model(target_model_name):
+    """
+    快取 Gemini 模型物件的初始化。
+    只有在第一次調用時會執行 genai.GenerativeModel()。
+    """
+    try:
+        # 這裡的邏輯可以進一步加強，例如在嘗試初始化前檢查模型是否可用
+        return genai.GenerativeModel(target_model_name)
+    except Exception as e:
+        # 如果模型載入失敗，這裡捕獲異常並可以選擇性地處理
+        st.error(f"❌ 快取 Gemini 模型時發生錯誤：{e}")
+        return None # 返回 None 或重新拋出異常
+
+# ====================================================================================
 
 
 if gemini_api_key: # 只有在有金鑰的情況下才嘗試配置和列出模型
@@ -73,11 +92,17 @@ if gemini_api_key: # 只有在有金鑰的情況下才嘗試配置和列出模�
                 break
 
         if target_model_available:
-            # 直接使用完整且正確的模型名稱
-            # 這裡我們使用 start_chat() 而不是直接 GenerativeModel()，以便更好地管理會話歷史
-            model = genai.GenerativeModel(TARGET_GEMINI_MODEL)
-            st.sidebar.success(f"✅ Gemini 模型 '{TARGET_GEMINI_MODEL}' 已成功載入。")
-            gemini_api_working = True
+            # ==============================================================================
+            # 從快取函數中獲取模型實例
+            model = get_gemini_model(TARGET_GEMINI_MODEL)
+            # ==============================================================================
+
+            if model: # 確保模型成功從快取中獲取且不為 None
+                st.sidebar.success(f"✅ Gemini 模型 '{TARGET_GEMINI_MODEL}' 已成功載入。")
+                gemini_api_working = True
+            else:
+                st.sidebar.error(f"❌ 無法從快取獲取 Gemini 模型 '{TARGET_GEMINI_MODEL}'。")
+                st.sidebar.info("請檢查 API 金鑰和網路連線。")
         else:
             st.sidebar.error(f"❌ 模型 '{TARGET_GEMINI_MODEL}' 不可用或不支持 generateContent。")
             st.sidebar.info("請檢查您的 API 金鑰權限、地區限制或嘗試其他模型。")
@@ -108,7 +133,12 @@ with tab_csv_upload:
 
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file)
+            # 使用 @st.cache_data 載入 CSV，防止每次頁面重新運行都重複讀取
+            @st.cache_data
+            def load_csv_data(file):
+                return pd.read_csv(file)
+
+            df = load_csv_data(uploaded_file)
             st.success("✅ 上傳成功！以下為資料內容預覽：")
             st.dataframe(df.head()) # 顯示前幾行數據
 
@@ -195,7 +225,11 @@ with tab_gemini_ai:
         # 但我們會將歷史記錄從 session_state 傳入
         if "chat" not in st.session_state:
             try:
-                st.session_state.chat = model.start_chat(history=st.session_state.messages)
+                # 確保 model 已被成功載入且不為 None
+                if model:
+                    st.session_state.chat = model.start_chat(history=st.session_state.messages)
+                else:
+                    raise ValueError("Gemini 模型未成功載入。")
             except Exception as e:
                 st.error(f"❌ 無法啟動 Gemini 聊天會話：{e}")
                 st.info("這可能是由於 API 金鑰問題或模型無法初始化。")
