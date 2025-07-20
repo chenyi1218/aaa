@@ -1,148 +1,68 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import google.generativeai as genai
-# import os # 在這個版本中未直接使用os.environ，但引入它以備不時之需，保持不動
+import time # 用於模擬加載時間
+import io # 用於將DataFrame轉換為字符串
 
 # --- Streamlit 頁面設定 (必須是第一個 Streamlit 命令，在任何其他 st. 開頭的命令之前) ---
-# 設定寬版面。如果您想要內容居中，可以改為 layout="centered"
 st.set_page_config(page_title="心理健康資料分析 + AI 問答", layout="wide")
 
-# **注意：更改主題顏色需在專案目錄下 .streamlit/config.toml 中設定。**
-# 範例 config.toml 內容：
-# [theme]
-# primaryColor="#4CAF50" # 綠色系按鈕和高亮
-# backgroundColor="#E8F5E9" # 淺綠色背景
-# secondaryBackgroundColor="#C8E6C9" # 略深一點的綠色側邊欄
-# textColor="#212121"     # 深灰文字
-# font="sans serif" # 字體 (可以是 'sans serif', 'serif', 'monospace')
-
-
 # --- 設定 Gemini API 金鑰 ---
-# 推薦使用 st.secrets 從 secrets.toml 檔案中安全地讀取金鑰
-gemini_api_key = None # 初始化為 None
-try:
-    # 嘗試從 Streamlit Secrets 獲取 API 金鑰
-    gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    genai.configure(api_key=gemini_api_key)
-except KeyError:
-    # 如果找不到金鑰，顯示錯誤訊息和設定指南
-    st.error("❌ 錯誤：找不到 Gemini API 金鑰！")
-    st.markdown("""
-        為了讓 AI 問答助理正常運作，請依照以下步驟設定您的 Gemini API 金鑰：
-
-        1.  **獲取金鑰：** 前往 Google AI Studio ([aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)) 獲取您的 Gemini API 金鑰。
-        2.  **本地運行：**
-            * 在您的 Streamlit 專案資料夾中，建立一個名為 **`.streamlit`** 的子資料夾。
-            * 在 `.streamlit` 資料夾中，建立一個名為 **`secrets.toml`** 的檔案。
-            * 打開 `secrets.toml`，並加入以下內容 (請將 `YOUR_ACTUAL_GEMINI_API_KEY` 替換成您的真實金鑰)：
-                ```toml
-                # .streamlit/secrets.toml
-                GEMINI_API_KEY = "YOUR_ACTUAL_GEMINI_API_KEY"
-                ```
-        3.  **部署到 Streamlit Cloud：**
-            * 在 Streamlit Cloud 的應用程式設定中，找到 **"Secrets"** 或 **"Environment variables"**。
-            * 設定一個新的 Secret，變數名稱為 `GEMINI_API_KEY`，值為您的完整 API 金鑰。
-
-        完成上述步驟後，請重新運行您的應用程式。
-    """)
-    # 不使用 st.stop()，讓使用者可以看到整個應用程式介面，但 AI 功能會被禁用
+gemini_api_working = False # 標誌位，指示 Gemini API 是否可用
 
 # 設定您想要使用的 Gemini 模型名稱
-# 請根據您的需求選擇以下其中一個。如果您不確定，先嘗試 gemini-pro
-# TARGET_GEMINI_MODEL = "models/gemini-pro"
-# TARGET_GEMINI_MODEL = "models/gemini-1.5-pro"
 TARGET_GEMINI_MODEL = "models/gemini-1.5-flash"
-
-# ✅ 建立 Gemini 模型物件
-model = None # 初始化為 None
-gemini_api_working = False # 標誌位，指示 Gemini API 是否可用
 
 # ====================================================================================
 # 使用 @st.cache_resource 來快取 Gemini 模型物件的載入
-# 這會確保模型只在應用程式啟動時載入一次，即使 Streamlit 重新運行也不會重複載入。
 @st.cache_resource
-def get_gemini_model(target_model_name):
+def get_gemini_model_cached(target_model_name, api_key):
     """
     快取 Gemini 模型物件的初始化。
     只有在第一次調用時會執行 genai.GenerativeModel()。
     """
+    if not api_key:
+        return None # 如果沒有金鑰，則無法初始化模型
+
     try:
-        # 這裡的邏輯可以進一步加強，例如在嘗試初始化前檢查模型是否可用
-        return genai.GenerativeModel(target_model_name)
+        genai.configure(api_key=api_key) # 使用用戶提供的金鑰配置
+        # 嘗試一個小的互動來確認模型是否真的可用，例如列出模型
+        _ = list(genai.list_models()) # 嘗試列出模型以確認API連接
+        model_instance = genai.GenerativeModel(target_model_name)
+        return model_instance
     except Exception as e:
-        # 如果模型載入失敗，這裡捕獲異常並可以選擇性地處理
-        st.error(f"❌ 快取 Gemini 模型時發生錯誤：{e}")
-        return None # 返回 None 或重新拋出異常
+        # st.error 訊息在調用處統一處理，這裡只返回 None
+        return None # 返回 None 表示模型載入失敗
 
 # ====================================================================================
 
-
-if gemini_api_key: # 只有在有金鑰的情況下才嘗試配置和列出模型
-    st.sidebar.subheader("Gemini 模型狀態")
-    try:
-        # 列出所有可用的模型及其支援的方法
-        models_list = genai.list_models()
-
-        # 檢查 TARGET_GEMINI_MODEL 是否可用且支援 generateContent
-        target_model_available = False
-        for m in models_list:
-            if m.name == TARGET_GEMINI_MODEL and "generateContent" in m.supported_generation_methods:
-                target_model_available = True
-                break
-
-        if target_model_available:
-            # ==============================================================================
-            # 從快取函數中獲取模型實例
-            model = get_gemini_model(TARGET_GEMINI_MODEL)
-            # ==============================================================================
-
-            if model: # 確保模型成功從快取中獲取且不為 None
-                st.sidebar.success(f"✅ Gemini 模型 '{TARGET_GEMINI_MODEL}' 已成功載入。")
-                gemini_api_working = True
-            else:
-                st.sidebar.error(f"❌ 無法從快取獲取 Gemini 模型 '{TARGET_GEMINI_MODEL}'。")
-                st.sidebar.info("請檢查 API 金鑰和網路連線。")
-        else:
-            st.sidebar.error(f"❌ 模型 '{TARGET_GEMINI_MODEL}' 不可用或不支持 generateContent。")
-            st.sidebar.info("請檢查您的 API 金鑰權限、地區限制或嘗試其他模型。")
-
-    except Exception as e:
-        st.sidebar.error(f"❌ 無法連接 Gemini API 或列出模型：{e}")
-        st.sidebar.info("請檢查您的網路連接或 API 金鑰是否有效。")
-else:
-    # 如果 gemini_api_key 不存在 (即 Key Error 發生)，則在側邊欄顯示提示
-    st.sidebar.subheader("Gemini 模型狀態")
-    st.sidebar.warning("API 金鑰未提供，AI 問答功能將無法使用。")
-
-
-# --- 頁面標題與圖片 (現在這些都會在 set_page_config 之後執行) ---
-# 您可以將圖片檔案放在與 aaa.py 同一資料夾下，例如 'logo.png'
-# st.image("logo.png", width=80) # 使用本地圖片範例 (需要您有 'logo.png' 檔案)
-st.image("https://cdn-icons-png.flaticon.com/512/2331/2331970.png", width=80) # 使用網路圖片
+# --- 頁面標題與圖片 ---
+st.image("https://cdn-icons-png.flaticon.com/512/2331/2331970.png", width=80)
 st.title("🧠 心理健康資料分析平台")
 st.markdown("本平台支援上傳 CSV 檔進行視覺化分析，並可使用 Gemini AI 進行問答互動。")
 
-# --- 功能切換：從側邊欄選單改為頁面頂部的 Tabs ---
+# --- 功能切換：頁面頂部的 Tabs ---
 tab_csv_upload, tab_gemini_ai = st.tabs(["📁 上傳 CSV", "🤖 Gemini AI 問答"])
 
-# --- 功能一：CSV 上傳與分析 (現在在第一個 Tab 中) ---
+# --- 功能一：CSV 上傳與分析 (在第一個 Tab 中) ---
 with tab_csv_upload:
     st.subheader("📊 資料分析與視覺化")
     uploaded_file = st.file_uploader("請上傳 CSV 檔案", type="csv", key="csv_uploader_main")
 
     if uploaded_file:
         try:
-            # 使用 @st.cache_data 載入 CSV，防止每次頁面重新運行都重複讀取
             @st.cache_data
             def load_csv_data(file):
                 return pd.read_csv(file)
 
             df = load_csv_data(uploaded_file)
+            # 將 DataFrame 儲存到 session_state，供 AI 問答使用
+            st.session_state.uploaded_df = df
             st.success("✅ 上傳成功！以下為資料內容預覽：")
-            st.dataframe(df.head()) # 顯示前幾行數據
+            st.dataframe(df.head())
 
-            # 顯示統計摘要
             st.markdown("### 📝 資料概覽")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -152,7 +72,6 @@ with tab_csv_upload:
             with col3:
                 st.metric("缺值總數", df.isnull().sum().sum())
 
-            # 使用 Expander 組織視覺化內容
             with st.expander("📈 點擊查看數值欄位視覺化"):
                 numeric_cols = df.select_dtypes(include='number').columns
                 if len(numeric_cols) > 0:
@@ -161,7 +80,7 @@ with tab_csv_upload:
                     chart_type = st.radio(
                         "選擇圖表類型",
                         ["直方圖 (分佈)", "折線圖 (趨勢)", "箱形圖 (分佈與異常值)"],
-                        horizontal=True, # 讓選項橫向排列
+                        horizontal=True,
                         key="chart_type_radio"
                     )
 
@@ -197,51 +116,93 @@ with tab_csv_upload:
         except Exception as e:
             st.error(f"❌ 讀取 CSV 檔案時發生錯誤：{e}")
             st.info("請確認您上傳的是有效的 CSV 檔案，並且編碼正確。")
+            # 如果上傳失敗，清空或重置 session_state 中的 DataFrame
+            if 'uploaded_df' in st.session_state:
+                del st.session_state.uploaded_df
     else:
         st.info("請上傳一個 CSV 檔案來開始分析。")
+        # 如果沒有上傳檔案，確保 session_state 中的 DataFrame 是空的
+        if 'uploaded_df' in st.session_state:
+            del st.session_state.uploaded_df
 
-# --- 功能二：Gemini AI 問答 (現在在第二個 Tab 中) ---
+# --- 功能二：Gemini AI 問答 (在第二個 Tab 中) ---
 with tab_gemini_ai:
     st.subheader("🤖 AI 問答助理（Gemini）")
 
-    # --- 新增的刪除聊天記錄按鈕 ---
-    # 只有在 AI 助理工作時，並且有歷史訊息時才顯示刪除按鈕
-    if gemini_api_working and "messages" in st.session_state and st.session_state.messages:
-        if st.button("🗑️ 清空聊天記錄", help="點擊此按鈕將刪除所有聊天對話記錄"):
-            st.session_state.messages = [] # 清空聊天記錄列表
-            st.session_state.chat = None   # 清空聊天會話，讓其重新初始化
-            st.rerun() # 重新運行應用程式，刷新顯示
+    # --- 用戶輸入 API 金鑰 ---
+    st.markdown("#### 🔑 輸入您的 Gemini API 金鑰")
+    if "gemini_api_key_input" not in st.session_state:
+        st.session_state.gemini_api_key_input = ""
 
-    if not gemini_api_working: # 如果 API 或模型未成功載入，禁用 AI 功能
+    current_api_key = st.text_input(
+        "請在此處輸入您的 Gemini API 金鑰：",
+        type="password",
+        value=st.session_state.gemini_api_key_input,
+        key="gemini_api_key_text_input",
+        help="前往 Google AI Studio (aistudio.google.com/app/apikey) 獲取您的金鑰。"
+    )
+
+    if current_api_key and current_api_key != st.session_state.gemini_api_key_input:
+        st.session_state.gemini_api_key_input = current_api_key
+        st.rerun()
+
+    # 獲取模型實例，這次會依賴用戶輸入的 current_api_key
+    model = get_gemini_model_cached(TARGET_GEMINI_MODEL, current_api_key)
+
+    if model:
+        st.sidebar.success(f"✅ Gemini 模型 '{TARGET_GEMINI_MODEL}' 已成功載入。")
+        gemini_api_working = True
+    else:
+        st.sidebar.error(f"❌ 無法載入 Gemini 模型 '{TARGET_GEMINI_MODEL}'。")
+        if not current_api_key:
+            st.sidebar.warning("請在 AI 問答區域輸入有效的 Gemini API 金鑰。")
+        else:
+            st.sidebar.info("請檢查您的 API 金鑰是否有效、網路連線，或嘗試刷新頁面。")
+        gemini_api_working = False
+
+    # --- 新增的刪除聊天記錄按鈕 ---
+    if gemini_api_working and "messages" in st.session_state and st.session_state.messages:
+        if st.button("🗑️ 清空聊天記錄", help="點擊此按鈕將刪除所有聊天對話記錄", key="clear_chat_button"):
+            st.session_state.messages = []
+            st.session_state.chat = None
+            st.rerun()
+
+    if not gemini_api_working:
         st.warning("⚠️ Gemini AI 助理目前無法使用，因為 API 金鑰無效或模型未正確載入。")
-        st.info("請檢查側邊欄的 Gemini 模型狀態和上方 API 金鑰設定說明。")
+        st.info("請輸入您的 Gemini API 金鑰並嘗試刷新頁面。")
     else:
         # --- 會話歷史管理 ---
-        # 初始化聊天歷史
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
-        # 創建一個聊天對象。每次重新運行應用程式時都會創建新的聊天對象
-        # 但我們會將歷史記錄從 session_state 傳入
-        if "chat" not in st.session_state:
+        if "chat" not in st.session_state or st.session_state.chat is None:
             try:
-                # 確保 model 已被成功載入且不為 None
                 if model:
                     st.session_state.chat = model.start_chat(history=st.session_state.messages)
                 else:
-                    raise ValueError("Gemini 模型未成功載入。")
+                    st.error("❌ Gemini 模型未成功載入，無法啟動聊天會話。")
+                    st.session_state.chat = None
             except Exception as e:
                 st.error(f"❌ 無法啟動 Gemini 聊天會話：{e}")
                 st.info("這可能是由於 API 金鑰問題或模型無法初始化。")
-                st.session_state.chat = None # 確保 chat 物件為 None
+                st.session_state.chat = None
 
         # 顯示歷史訊息
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
-                st.markdown(message["parts"]) # 使用 markdown 更好地顯示內容
+                st.markdown(message["parts"])
 
-        st.info("您可以向 AI 助理提問任何問題！")
-        user_input = st.chat_input("請輸入你的問題：", key="gemini_query_input") # 使用 st.chat_input 改善體驗
+        # 判斷是否有上傳的 CSV 資料
+        uploaded_df_exists = 'uploaded_df' in st.session_state and st.session_state.uploaded_df is not None and not st.session_state.uploaded_df.empty
+
+        if uploaded_df_exists:
+            st.info("您已上傳 CSV 檔案。您可以向 AI 助理提問關於此資料的問題！")
+            st.markdown(f"**當前資料集：** {uploaded_file.name} ({st.session_state.uploaded_df.shape[0]} 行, {st.session_state.uploaded_df.shape[1]} 列)")
+        else:
+            st.info("您可以向 AI 助理提問任何問題！(若要提問資料內容，請先上傳 CSV 檔案)")
+
+
+        user_input = st.chat_input("請輸入你的問題：", key="gemini_query_input")
 
         if user_input:
             # 將使用者訊息添加到聊天歷史中
@@ -249,15 +210,39 @@ with tab_gemini_ai:
             with st.chat_message("user"):
                 st.markdown(user_input)
 
-            if st.session_state.chat: # 只有在 chat 物件成功創建後才嘗試發送請求
+            if st.session_state.chat:
                 with st.spinner("Gemini 思考中... 請稍候片刻"):
                     try:
-                        # 向 Gemini 發送包含完整歷史的請求
-                        # 注意：genai.GenerativeModel.generate_content() 和 ChatSession.send_message() 的用法不同
-                        # 對於 ChatSession，直接使用 send_message 即可，它會自動管理歷史
-                        response = st.session_state.chat.send_message(user_input)
+                        # --- 關鍵修改：準備資料上下文並添加到提示詞中 ---
+                        full_prompt = user_input
+                        if uploaded_df_exists:
+                            df_to_analyze = st.session_state.uploaded_df
 
-                        # 將 AI 回覆添加到聊天歷史中
+                            # 創建資料的文字描述，包括列名、數據類型和前幾行
+                            # 使用 StringIO 來捕獲 df.info() 的輸出
+                            buffer = io.StringIO()
+                            df_to_analyze.info(buf=buffer)
+                            df_info_str = buffer.getvalue()
+
+                            data_context = f"""
+                            以下是您需要分析的 CSV 資料的上下文。請根據這些資料來回答我的問題。
+                            資料概覽 (df.info()):
+                            ```
+                            {df_info_str}
+                            ```
+                            資料前5行 (df.head()):
+                            ```
+                            {df_to_analyze.head().to_markdown(index=False)}
+                            ```
+                            我的問題是：{user_input}
+                            """
+                            full_prompt = data_context
+                            st.markdown("---") # 分隔線，讓用戶知道 AI 正在處理資料
+                            st.info("AI 正在分析您上傳的資料...")
+
+
+                        response = st.session_state.chat.send_message(full_prompt)
+
                         ai_response_text = response.text
                         st.session_state.messages.append({"role": "model", "parts": ai_response_text})
 
@@ -269,4 +254,4 @@ with tab_gemini_ai:
                         st.info("請檢查您的 API 金鑰設定，並確保您的問題符合 Google 的使用規範。")
             else:
                 st.error("❌ 聊天會話未成功初始化，無法發送訊息。")
-                st.info("請檢查側邊欄的 Gemini 模型狀態。")
+                st.info("請在上方輸入您的 API 金鑰，並確認模型狀態。")
