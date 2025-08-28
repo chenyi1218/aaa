@@ -3,16 +3,12 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import google.generativeai as genai
-import time # 用於模擬加載時間
 import io # 用於將DataFrame轉換為字符串
 
-# --- Streamlit 頁面設定 (必須是第一個 Streamlit 命令，在任何其他 st. 開頭的命令之前) ---
+# --- Streamlit 頁面設定 (必須是第一個 Streamlit 命令) ---
 st.set_page_config(page_title="心理健康資料分析 + AI 問答", layout="wide")
 
-# --- 設定 Gemini API 金鑰 ---
-gemini_api_working = False # 標誌位，指示 Gemini API 是否可用
-
-# 設定您想要使用的 Gemini 模型名稱
+# --- 設定 Gemini 模型名稱 ---
 TARGET_GEMINI_MODEL = "models/gemini-1.5-flash"
 
 # ====================================================================================
@@ -24,17 +20,15 @@ def get_gemini_model_cached(target_model_name, api_key):
     只有在第一次調用時會執行 genai.GenerativeModel()。
     """
     if not api_key:
-        return None # 如果沒有金鑰，則無法初始化模型
-
+        return None
     try:
-        genai.configure(api_key=api_key) # 使用用戶提供的金鑰配置
+        genai.configure(api_key=api_key)
         # 嘗試一個小的互動來確認模型是否真的可用，例如列出模型
-        _ = list(genai.list_models()) # 嘗試列出模型以確認API連接
+        _ = list(genai.list_models())
         model_instance = genai.GenerativeModel(target_model_name)
         return model_instance
     except Exception as e:
-        # st.error 訊息在調用處統一處理，這裡只返回 None
-        return None # 返回 None 表示模型載入失敗
+        return None
 
 # ====================================================================================
 
@@ -52,76 +46,71 @@ with tab_csv_upload:
     uploaded_file = st.file_uploader("請上傳 CSV 檔案", type="csv", key="csv_uploader_main")
 
     if uploaded_file:
-        try:
-            @st.cache_data
-            def load_csv_data(file):
-                return pd.read_csv(file)
+        with st.spinner("⏳ 正在讀取並分析您的 CSV 檔案..."):
+            try:
+                @st.cache_data
+                def load_csv_data(file):
+                    return pd.read_csv(file)
 
-            df = load_csv_data(uploaded_file)
-            # 將 DataFrame 儲存到 session_state，供 AI 問答使用
-            st.session_state.uploaded_df = df
-            st.success("✅ 上傳成功！以下為資料內容預覽：")
-            st.dataframe(df.head())
+                df = load_csv_data(uploaded_file)
+                st.session_state.uploaded_df = df
+                st.success("✅ 上傳成功！以下為資料內容預覽：")
+                st.dataframe(df.head())
 
-            st.markdown("### 📝 資料概覽")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("資料筆數", len(df))
-            with col2:
-                st.metric("欄位數", len(df.columns))
-            with col3:
-                st.metric("缺值總數", df.isnull().sum().sum())
+                st.markdown("### 📝 資料概覽")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("資料筆數", len(df))
+                with col2:
+                    st.metric("欄位數", len(df.columns))
+                with col3:
+                    st.metric("缺值總數", df.isnull().sum().sum())
 
-            with st.expander("📈 點擊查看數值欄位視覺化"):
-                numeric_cols = df.select_dtypes(include='number').columns
-                if len(numeric_cols) > 0:
-                    selected_col = st.selectbox("選擇要分析的數值欄位", numeric_cols, key="numeric_col_select")
+                with st.expander("📈 點擊查看數值欄位視覺化"):
+                    numeric_cols = df.select_dtypes(include='number').columns
+                    if len(numeric_cols) > 0:
+                        selected_col = st.selectbox("選擇要分析的數值欄位", numeric_cols, key="numeric_col_select")
 
-                    chart_type = st.radio(
-                        "選擇圖表類型",
-                        ["直方圖 (分佈)", "折線圖 (趨勢)", "箱形圖 (分佈與異常值)"],
-                        horizontal=True,
-                        key="chart_type_radio"
-                    )
+                        chart_type = st.radio(
+                            "選擇圖表類型",
+                            ["直方圖 (分佈)", "折線圖 (趨勢)", "箱形圖 (分佈與異常值)"],
+                            horizontal=True,
+                            key="chart_type_radio"
+                        )
 
-                    if chart_type == "直方圖 (分佈)":
-                        st.write(f"**{selected_col} 的直方圖：**")
                         fig, ax = plt.subplots()
-                        df[selected_col].hist(ax=ax, bins=20, edgecolor='black')
-                        ax.set_title(f'{selected_col} 分佈')
-                        ax.set_xlabel(selected_col)
-                        ax.set_ylabel('頻率')
-                        st.pyplot(fig)
-                    elif chart_type == "折線圖 (趨勢)":
-                        st.write(f"**{selected_col} 的折線圖：**")
-                        st.line_chart(df[selected_col])
-                    elif chart_type == "箱形圖 (分佈與異常值)":
-                        st.write(f"**{selected_col} 的箱形圖：**")
-                        fig, ax = plt.subplots()
-                        df.boxplot(column=selected_col, ax=ax)
-                        ax.set_title(f'{selected_col} 箱形圖')
-                        st.pyplot(fig)
-                else:
-                    st.warning("此資料集無可視覺化的數值欄位。")
+                        if chart_type == "直方圖 (分佈)":
+                            ax.set_title(f'{selected_col} 分佈')
+                            ax.set_xlabel(selected_col)
+                            ax.set_ylabel('頻率')
+                            df[selected_col].hist(ax=ax, bins=20, edgecolor='black')
+                            st.pyplot(fig)
+                        elif chart_type == "折線圖 (趨勢)":
+                            st.line_chart(df[selected_col])
+                        elif chart_type == "箱形圖 (分佈與異常值)":
+                            ax.set_title(f'{selected_col} 箱形圖')
+                            ax.set_ylabel(selected_col)
+                            df.boxplot(column=selected_col, ax=ax)
+                            st.pyplot(fig)
+                    else:
+                        st.warning("此資料集無可視覺化的數值欄位。")
 
-            with st.expander("📊 點擊查看類別欄位分佈"):
-                categorical_cols = df.select_dtypes(include='object').columns
-                if len(categorical_cols) > 0:
-                    selected_cat_col = st.selectbox("選擇要分析的類別欄位", categorical_cols, key="cat_col_select")
-                    st.write(f"**{selected_cat_col} 的計數分佈：**")
-                    st.bar_chart(df[selected_cat_col].value_counts())
-                else:
-                    st.info("此資料集無類別欄位可供分析。")
+                with st.expander("📊 點擊查看類別欄位分佈"):
+                    categorical_cols = df.select_dtypes(include='object').columns
+                    if len(categorical_cols) > 0:
+                        selected_cat_col = st.selectbox("選擇要分析的類別欄位", categorical_cols, key="cat_col_select")
+                        st.write(f"**{selected_cat_col} 的計數分佈：**")
+                        st.bar_chart(df[selected_cat_col].value_counts())
+                    else:
+                        st.info("此資料集無類別欄位可供分析。")
 
-        except Exception as e:
-            st.error(f"❌ 讀取 CSV 檔案時發生錯誤：{e}")
-            st.info("請確認您上傳的是有效的 CSV 檔案，並且編碼正確。")
-            # 如果上傳失敗，清空或重置 session_state 中的 DataFrame
-            if 'uploaded_df' in st.session_state:
-                del st.session_state.uploaded_df
+            except Exception as e:
+                st.error(f"❌ 讀取 CSV 檔案時發生錯誤：{e}")
+                st.info("請確認您上傳的是有效的 CSV 檔案，並且編碼正確。")
+                if 'uploaded_df' in st.session_state:
+                    del st.session_state.uploaded_df
     else:
         st.info("請上傳一個 CSV 檔案來開始分析。")
-        # 如果沒有上傳檔案，確保 session_state 中的 DataFrame 是空的
         if 'uploaded_df' in st.session_state:
             del st.session_state.uploaded_df
 
@@ -146,7 +135,6 @@ with tab_gemini_ai:
         st.session_state.gemini_api_key_input = current_api_key
         st.rerun()
 
-    # 獲取模型實例，這次會依賴用戶輸入的 current_api_key
     model = get_gemini_model_cached(TARGET_GEMINI_MODEL, current_api_key)
 
     if model:
@@ -160,39 +148,32 @@ with tab_gemini_ai:
             st.sidebar.info("請檢查您的 API 金鑰是否有效、網路連線，或嘗試刷新頁面。")
         gemini_api_working = False
 
-    # --- 新增的刪除聊天記錄按鈕 ---
     if gemini_api_working and "messages" in st.session_state and st.session_state.messages:
         if st.button("🗑️ 清空聊天記錄", help="點擊此按鈕將刪除所有聊天對話記錄", key="clear_chat_button"):
             st.session_state.messages = []
-            st.session_state.chat = None
+            if "chat" in st.session_state:
+                del st.session_state.chat
             st.rerun()
 
     if not gemini_api_working:
         st.warning("⚠️ Gemini AI 助理目前無法使用，因為 API 金鑰無效或模型未正確載入。")
         st.info("請輸入您的 Gemini API 金鑰並嘗試刷新頁面。")
     else:
-        # --- 會話歷史管理 ---
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
         if "chat" not in st.session_state or st.session_state.chat is None:
             try:
-                if model:
-                    st.session_state.chat = model.start_chat(history=st.session_state.messages)
-                else:
-                    st.error("❌ Gemini 模型未成功載入，無法啟動聊天會話。")
-                    st.session_state.chat = None
+                st.session_state.chat = model.start_chat(history=st.session_state.messages)
             except Exception as e:
                 st.error(f"❌ 無法啟動 Gemini 聊天會話：{e}")
                 st.info("這可能是由於 API 金鑰問題或模型無法初始化。")
                 st.session_state.chat = None
 
-        # 顯示歷史訊息
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["parts"])
 
-        # 判斷是否有上傳的 CSV 資料
         uploaded_df_exists = 'uploaded_df' in st.session_state and st.session_state.uploaded_df is not None and not st.session_state.uploaded_df.empty
 
         if uploaded_df_exists:
@@ -201,11 +182,9 @@ with tab_gemini_ai:
         else:
             st.info("您可以向 AI 助理提問任何問題！(若要提問資料內容，請先上傳 CSV 檔案)")
 
-
         user_input = st.chat_input("請輸入你的問題：", key="gemini_query_input")
 
         if user_input:
-            # 將使用者訊息添加到聊天歷史中
             st.session_state.messages.append({"role": "user", "parts": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
@@ -213,22 +192,37 @@ with tab_gemini_ai:
             if st.session_state.chat:
                 with st.spinner("Gemini 思考中... 請稍候片刻"):
                     try:
-                        # --- 關鍵修改：準備資料上下文並添加到提示詞中 ---
+                        # --- 關鍵修改：準備更詳盡的資料上下文與系統提示詞 ---
                         full_prompt = user_input
                         if uploaded_df_exists:
                             df_to_analyze = st.session_state.uploaded_df
 
-                            # 創建資料的文字描述，包括列名、數據類型和前幾行
-                            # 使用 StringIO 來捕獲 df.info() 的輸出
+                            # 獲取 df.info() 的字串表示
                             buffer = io.StringIO()
                             df_to_analyze.info(buf=buffer)
                             df_info_str = buffer.getvalue()
 
+                            # 獲取 df.describe() 的 Markdown 表格表示
+                            df_desc_str = df_to_analyze.describe().to_markdown()
+
+                            # --- 系統角色與思考過程設定 ---
+                            system_prompt = f"""
+                            你是一位頂尖的數據分析師和心理健康領域的專家。
+                            你的任務是根據我提供的 CSV 數據和問題，進行專業、嚴謹的分析，並給出有價值的洞察與建議。
+                            你的回覆必須結構清晰，先列出你將如何分析的步驟（例如：1. 檢查數據；2. 尋找趨勢；3. 提出洞察），再給出結論。
+                            請不要憑空捏造數據，所有結論都必須嚴格基於提供的數據。
+                            """
+                            
+                            # --- 整合所有上下文 ---
                             data_context = f"""
-                            以下是您需要分析的 CSV 資料的上下文。請根據這些資料來回答我的問題。
+                            以下是您需要分析的 CSV 資料的上下文。
                             資料概覽 (df.info()):
                             ```
                             {df_info_str}
+                            ```
+                            資料統計摘要 (df.describe()):
+                            ```
+                            {df_desc_str}
                             ```
                             資料前5行 (df.head()):
                             ```
@@ -236,13 +230,11 @@ with tab_gemini_ai:
                             ```
                             我的問題是：{user_input}
                             """
-                            full_prompt = data_context
-                            st.markdown("---") # 分隔線，讓用戶知道 AI 正在處理資料
-                            st.info("AI 正在分析您上傳的資料...")
-
+                            full_prompt = system_prompt + data_context
+                            st.markdown("---")
+                            st.info("AI 正在分析您上傳的資料並進行深度思考...")
 
                         response = st.session_state.chat.send_message(full_prompt)
-
                         ai_response_text = response.text
                         st.session_state.messages.append({"role": "model", "parts": ai_response_text})
 
