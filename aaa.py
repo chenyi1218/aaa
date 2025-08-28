@@ -149,17 +149,6 @@ with tab_gemini_ai:
             if "chat" in st.session_state:
                 del st.session_state.chat
             st.rerun()
-
-    # --- 檢查 API 金鑰按鈕 ---
-    if st.button("🔍 檢查 API 金鑰", key="check_api_button"):
-        with st.spinner("正在檢查金鑰..."):
-            try:
-                genai.configure(api_key=current_api_key)
-                _ = genai.list_models()
-                st.success("✅ 您的 API 金鑰有效，可以正常使用！")
-            except Exception as e:
-                st.error(f"❌ 您的 API 金鑰無效或發生錯誤：{e}")
-                st.warning("請確認您輸入的金鑰正確，或嘗試重新生成一個。")
     
     # --- 自動生成報告按鈕 ---
     if gemini_api_working and 'uploaded_df' in st.session_state and not st.session_state.uploaded_df.empty:
@@ -202,7 +191,7 @@ with tab_gemini_ai:
                     response = model.generate_content(report_prompt)
                     report_text = response.text
                     st.session_state.messages.append({"role": "model", "parts": report_text})
-                    st.rerun()  # 新增這一行來更新聊天框顯示
+                    st.rerun()
 
                 except Exception as e:
                     st.error(f"❌ 生成報告時發生錯誤：{e}")
@@ -231,7 +220,8 @@ with tab_gemini_ai:
         
         if uploaded_df_exists:
             st.info("您已上傳 CSV 檔案。您可以向 AI 助理提問關於此資料的問題！")
-            st.markdown(f"**當前資料集：** {uploaded_file.name} ({st.session_state.uploaded_df.shape[0]} 行, {st.session_state.uploaded_df.shape[1]} 列)")
+            uploaded_file_name = uploaded_file.name if 'uploaded_file' in locals() else '當前資料集'
+            st.markdown(f"**當前資料集：** {uploaded_file_name} ({st.session_state.uploaded_df.shape[0]} 行, {st.session_state.uploaded_df.shape[1]} 列)")
         else:
             st.info("您可以向 AI 助理提問任何問題！(若要提問資料內容，請先上傳 CSV 檔案)")
 
